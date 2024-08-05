@@ -7,9 +7,7 @@
   ],
   "localRoots": [
     {
-      "accessPoints": [
-        {"address": "192.168.1.144", "port": 6000, "description": "Core"}
-      ],
+      "accessPoints": [],
       "advertise": false,
       "trustable": false,
       "hotValency": 1
