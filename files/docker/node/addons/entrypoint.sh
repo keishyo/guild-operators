@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 
 trap 'killall -s SIGINT cardano-node' SIGINT SIGTERM
-# "docker run --init" to enable the docker init proxy
-# To manually test: docker kill -s SIGTERM container
 
 head -n 8 ~/.scripts/banner.txt
 
@@ -54,7 +52,9 @@ if [[ -n "${NETWORK}" ]] ; then
   if [[ "${UPDATE_CHECK}" == "Y" ]] ; then
     "$CNODE_HOME"/scripts/guild-deploy.sh -n "$NETWORK" -u -s f > /dev/null 2>&1
   else
-    load_configs
+    if [[ ! -d "$CNODE_HOME/files" ]] || [[ -z "$(ls -A "$CNODE_HOME/files")" ]]; then
+      load_configs
+    fi
   fi
 else
   echo "Please set a NETWORK environment variable to one of: mainnet / preview / preprod / guild-mainnet / guild"
