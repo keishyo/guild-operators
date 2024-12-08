@@ -25,7 +25,6 @@
 #CONFIRM_SLOT_CNT=600                     # CNCLI validate: require at least these many slots to have passed before validating
 #CONFIRM_BLOCK_CNT=15                     # CNCLI validate: require at least these many blocks on top of minted before validating
 #BATCH_AUTO_UPDATE=N                      # Set to Y to automatically update the script if a new version is available without user interaction
-#USE_KOIOS_API=Y                          # Use Koios API in cncli leaderlog instead of local stake-snapshot query to reduce system resources. (default true)
 #CNCLI_PROM_PORT=12799                    # Set Prometheus port for cncli block metrics available through metrics operation (default: 12799)
 
 ######################################
@@ -45,10 +44,13 @@ usage() {
 		  force     Manually force leaderlog calculation and overwrite even if already done, exits after leaderlog is calculated
 		validate    Continously monitor and confirm that the blocks made actually was accepted and adopted by chain (deployed as service)
 		  all       One-time re-validation of all blocks in blocklog db
-		  epoch     One-time re-validation of blocks in blocklog db for the specified epoch 
+		  epoch     One-time re-validation of blocks in blocklog db for the specified epoch
+		epochdata   Manually re-calculate leaderlog to load stakepool history into epochdata table of blocklog db. Needs completion of cncli.sh sync and cncli.sh validate processes.
+		  all       One-time re-calculation of all epochs (avg execution duration: 1hr / 50 epochs)
+		  epoch     One-time re-calculation for the specified epoch
 		ptsendtip   Send node tip to PoolTool for network analysis and to show that your node is alive and well with a green badge (deployed as service)
 		ptsendslots Securely sends PoolTool the number of slots you have assigned for an epoch and validates the correctness of your past epochs (deployed as service)
-		  force     Manually force pooltool sendslots submission ignoring configured time window 
+		  force     Manually force pooltool sendslots submission ignoring configured time window
 		init        One-time initialization adding all minted and confirmed blocks to blocklog
 		metrics     Print cncli block metrics in Prometheus format
 		  deploy    Install dependencies and deploy cncli monitoring agent service (available through port specified by CNCLI_PROM_PORT)
@@ -127,11 +129,15 @@ getLedgerData() { # getNodeMetrics expected to have been already run
 }
 
 getConsensus() {
-  getProtocolParams
+  if isNumber "$1"; then
+     getProtocolParamsHist "$(( $1 - 1 ))" || return 1
+  else
+     getProtocolParams || return 1
+  fi
   if versionCheck "9.0" "${PROT_VERSION}"; then
     consensus="cpraos"
     stability_window_factor=3
-  elif versionCheck "8.0" "${PROT_VERSION}"; then
+  elif versionCheck "7.0" "${PROT_VERSION}"; then
     consensus="praos"
     stability_window_factor=2
   else
@@ -141,9 +147,8 @@ getConsensus() {
 }
 
 getKoiosData() {
-  [[ -z ${KOIOS_API} ]] && return 1
-  if ! stake_snapshot=$(curl -sSL -f -d _pool_bech32=${POOL_ID_BECH32} "${KOIOS_API}/pool_stake_snapshot" 2>&1); then
-    echo "ERROR: Koios pool_stake_snapshot query failed: curl -sSL -f -d _pool_bech32=${POOL_ID_BECH32} ${KOIOS_API}/pool_stake_snapshot"
+  if ! stake_snapshot=$(curl -sSL -f "${KOIOS_API_HEADERS[@]}" -d _pool_bech32=${POOL_ID_BECH32} "${KOIOS_API}/pool_stake_snapshot" 2>&1); then
+    echo "ERROR: Koios pool_stake_snapshot query failed: curl -sSL -f ${KOIOS_API_HEADERS[*]} -d _pool_bech32=${POOL_ID_BECH32} ${KOIOS_API}/pool_stake_snapshot"
     return 1
   fi
   read -ra stake_mark <<<"$(jq -r '.[] | select(.snapshot=="Mark") | [.pool_stake, .active_stake, .nonce] | @tsv' <<< ${stake_snapshot})"
@@ -210,7 +215,9 @@ cncliInit() {
     echo "sleeping for 10s and testing again..."
     sleep 10
   done
-  
+
+  test_koios
+
   TMP_DIR="${TMP_DIR}/cncli"
   if ! mkdir -p "${TMP_DIR}" 2>/dev/null; then echo "ERROR: Failed to create directory for temporary files: ${TMP_DIR}"; exit 1; fi
   
@@ -221,7 +228,6 @@ cncliInit() {
   [[ -z "${CNCLI_DIR}" ]] && CNCLI_DIR="${CNODE_HOME}/guild-db/cncli"
   if ! mkdir -p "${CNCLI_DIR}" 2>/dev/null; then echo "ERROR: Failed to create CNCLI DB directory: ${CNCLI_DIR}"; exit 1; fi
   CNCLI_DB="${CNCLI_DIR}/cncli.db"
-  [[ -z "${USE_KOIOS_API}" ]] && USE_KOIOS_API=Y
   [[ -z "${CNODE_HOST}" ]] && CNODE_HOST="127.0.0.1"
   [[ -z "${SLEEP_RATE}" ]] && SLEEP_RATE=60
   [[ -z "${CONFIRM_SLOT_CNT}" ]] && CONFIRM_SLOT_CNT=600
@@ -289,7 +295,7 @@ cncliLeaderlog() {
     echo "Leaderlogs already calculated for epoch ${curr_epoch}, skipping!"
   else
     echo "Running leaderlogs for epoch ${curr_epoch}"
-    if [[ ${USE_KOIOS_API} = Y ]]; then 
+    if [[ -n ${KOIOS_API} ]]; then 
       getKoiosData || exit 1
     else
       getLedgerData || exit 1
@@ -361,7 +367,7 @@ cncliLeaderlog() {
         else continue; fi
       fi
       echo "Running leaderlogs for next epoch[${next_epoch}]"
-      if [[ ${USE_KOIOS_API} = Y ]]; then
+      if [[ -n ${KOIOS_API} ]]; then
         if ! getKoiosData; then sleep 60; continue; fi # Sleep for 1 min before retrying to query koios again in case of error
       else
         if ! getLedgerData; then sleep 300; continue; fi # Sleep for 5 min before retrying to query stake snapshot in case of error
@@ -796,9 +802,183 @@ cncliPTsendslots() {
 }
 
 #################################
+# epochdata table load process  #
+#################################
+
+getCurrNextEpoch() {
+  getNodeMetrics
+  curr_epoch=${epochnum}
+  next_epoch=$((curr_epoch+1))
+}
+
+runCurrentEpoch() {
+  getKoiosData
+  echo "Processing current epoch: ${1}"
+  stake_param_curr="--active-stake ${active_stake_set} --pool-stake ${pool_stake_set}"
+
+  ${CNCLI} leaderlog ${cncliParams} --consensus "${consensus}" --epoch="${1}" ${stake_param_curr} |
+  jq -r '[.epoch, .epochNonce, .poolId, .sigma, .d, .epochSlotsIdeal, .maxPerformance, .activeStake, .totalActiveStake] | @csv' |
+  tr -d '"' >> "$tmpcsv"
+}
+
+runNextEpoch() {
+  getKoiosData
+  getNodeMetrics
+  getConsensus
+  slot_for_next_nonce=$(echo "(${slotnum} - ${slot_in_epoch} + ${EPOCH_LENGTH}) - (${stability_window_factor} * ${BYRON_K} / ${ACTIVE_SLOTS_COEFF})" | bc)
+  curr_epoch=${epochnum}
+  next_epoch=$((curr_epoch+1))
+
+  if [[ ${slotnum} -gt ${slot_for_next_nonce} ]]; then
+      if [[ $(sqlite3 "${BLOCKLOG_DB}" "SELECT COUNT(*) FROM epochdata WHERE epoch=${next_epoch};" 2>/dev/null) -eq 1 ]]; then
+        echo "Leaderlogs already calculated for epoch ${next_epoch}, skipping!" && return 1
+      else
+        echo "Processing next epoch: ${1}"
+        stake_param_next="--active-stake ${active_stake_mark} --pool-stake ${pool_stake_mark}"
+        ${CNCLI} leaderlog ${cncliParams} --consensus "${consensus}" --epoch="${1}" ${stake_param_next} |
+        jq -r '[.epoch, .epochNonce, .poolId, .sigma, .d, .epochSlotsIdeal, .maxPerformance, .activeStake, .totalActiveStake] | @csv' |
+        tr -d '"' >> "$tmpcsv"
+      fi
+  fi
+}
+
+runPreviousEpochs() {
+  [[ -z ${KOIOS_API} ]] && return 1
+  if ! pool_hist=$(curl -sSL -f "${KOIOS_API}/pool_history?_pool_bech32=${POOL_ID_BECH32}&_epoch_no=${1}" 2>&1); then
+    echo "ERROR: Koios pool_stake_snapshot history query failed."
+    return 1
+  fi
+
+  if ! epoch_hist=$(curl -sSL -f "${KOIOS_API}/epoch_info?_epoch_no=${1}" 2>&1); then
+    echo "ERROR: Koios epoch_stake_snapshot history query failed."
+    return 1
+  fi
+
+  pool_stake_hist=$(jq -r '.[].active_stake' <<< "${pool_hist}")
+  active_stake_hist=$(jq -r '.[].active_stake' <<< "${epoch_hist}")
+
+  echo "Processing previous epoch: ${1}"
+  stake_param_prev="--active-stake ${active_stake_hist} --pool-stake ${pool_stake_hist}"
+
+  ${CNCLI} leaderlog ${cncliParams} --consensus "${consensus}" --epoch="${1}" ${stake_param_prev} |
+  jq -r '[.epoch, .epochNonce, .poolId, .sigma, .d, .epochSlotsIdeal, .maxPerformance, .activeStake, .totalActiveStake] | @csv' |
+  tr -d '"' >> "$tmpcsv"
+
+  return 0
+}
+
+processAllEpochs() {
+  getCurrNextEpoch
+  IFS=' ' read -r -a epochs_array <<< "$EPOCHS"
+
+  for epoch in "${epochs_array[@]}"; do
+    if ! getConsensus "${epoch}"; then echo "ERROR: Failed to fetch protocol parameters for epoch ${epoch}."; return 1; fi
+    if [[ "$epoch" == "$curr_epoch" ]]; then
+      runCurrentEpoch ${epoch}
+    elif [[ "$epoch" == "$next_epoch" ]]; then
+      runNextEpoch ${epoch}
+    else
+      runPreviousEpochs ${epoch}
+    fi
+  done
+
+  id=1
+  while IFS= read -r row; do
+    echo "$id,$row" >> "$csvfile"
+    ((id++))
+  done < "$tmpcsv"
+
+  sqlite3 "$BLOCKLOG_DB" <<EOF
+DELETE FROM epochdata;
+VACUUM;
+.mode csv
+.import '$csvfile' epochdata
+REINDEX epochdata;
+EOF
+
+  row_count=$(sqlite3 "$BLOCKLOG_DB" "SELECT COUNT(*) FROM epochdata;")
+  echo "$row_count rows have been loaded into epochdata table in blocklog db"
+  echo "~ CNCLI epochdata table load completed ~"
+
+  rm $csvfile $tmpcsv
+}
+
+processSingleEpoch() {
+  getCurrNextEpoch
+  IFS=' ' read -r -a epochs_array <<< "$EPOCHS"
+
+  unset matched
+  for epoch in "${epochs_array[@]}"; do
+    [[ ${epoch} = "$1" ]] && matched=true && break
+  done
+  if [[ -z ${matched} ]]; then
+    echo -e "No slots found in blocklog table for epoch ${1}.\n"
+    echo -e "choose from epochs in list:\n $EPOCHS"; return 1
+  fi
+  if ! getConsensus "${1}"; then echo "ERROR: Failed to fetch protocol parameters for epoch ${1}."; return 1; fi
+  if [[ "$1" == "$curr_epoch" ]]; then
+     runCurrentEpoch ${1}
+  elif [[ "$1" == "$next_epoch" ]]; then
+     runNextEpoch ${1}
+  else
+     runPreviousEpochs ${1}
+  fi
+
+  ID=$(sqlite3 "$BLOCKLOG_DB" "SELECT max(id) + 1 FROM epochdata;")
+  csv_row=$(cat "$tmpcsv")
+  modified_csv_row="${ID},${csv_row}"
+  echo "$modified_csv_row" > "$onerow_csv"
+
+  sqlite3 "$BLOCKLOG_DB" "DELETE FROM epochdata WHERE epoch = ${1};"
+  sqlite3 "$BLOCKLOG_DB" <<EOF
+.mode csv
+.import "$onerow_csv" epochdata
+REINDEX epochdata;
+EOF
+   row_count=$(sqlite3 "$BLOCKLOG_DB" "SELECT COUNT(*) FROM epochdata WHERE epoch = ${1};")
+   echo "$row_count row has been loaded into epochdata table in blocklog db for epoch ${1}"
+   echo "~ CNCLI epochdata table load completed ~"
+   echo
+
+   rm $onerow_csv $tmpcsv
+}
+
+cncliEpochData() {
+  getNodeMetrics
+  cncliParams="--db ${CNCLI_DB} --byron-genesis ${BYRON_GENESIS_JSON} --shelley-genesis ${GENESIS_JSON} --pool-id ${POOL_ID} --pool-vrf-skey ${POOL_VRF_SKEY} --tz UTC"
+  EPOCHS=$(sqlite3 "$BLOCKLOG_DB" "SELECT group_concat(epoch,' ') FROM (SELECT DISTINCT epoch FROM blocklog ORDER BY epoch);")
+  csvdir=/tmp ; tmpcsv="${csvdir}/epochdata_tmp.csv" ; csvfile="${csvdir}/epochdata.csv" ; onerow_csv="${csvdir}/one_epochdata.csv"
+  true > "$tmpcsv" ; true > "$csvfile" ; true > "$onerow_csv"
+
+  proc_msg="~ CNCLI epochdata table load started ~"
+
+  if ! cncliDBinSync; then
+    echo ${proc_msg}
+    echo "CNCLI DB out of sync :( [$(printf "%2.4f %%" ${cncli_sync_prog})] ... check cncli sync service!"
+    exit 1
+  else
+    echo ${proc_msg}
+    getLedgerData
+
+    if [[ "${subcommand}" == "epochdata" ]]; then
+        if [[ ${subarg} == "all" ]]; then
+           processAllEpochs
+      elif isNumber "${subarg}"; then
+           processSingleEpoch "${subarg}"
+    else
+        echo
+        echo "ERROR: unknown argument passed to validate command, valid options incl the string 'all' or the epoch number to recalculate"
+        echo
+        exit 1
+      fi
+    fi
+  fi
+}
+
+#################################
 
 case ${subcommand} in
-  sync ) 
+  sync )
     cncliInit && cncliSync ;;
   leaderlog )
     cncliInit && cncliLeaderlog ;;
@@ -812,5 +992,8 @@ case ${subcommand} in
     cncliInit && cncliInitBlocklogDB ;;
   metrics )
     cncliMetrics ;; # no cncliInit needed
-  * ) usage ;;
+  epochdata )
+    cncliInit && cncliEpochData ;;
+  * )
+    usage ;;
 esac

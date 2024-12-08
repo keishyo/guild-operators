@@ -28,7 +28,7 @@ exec 2>/dev/null
 [[ -z ${DBSYNC_PROM_PORT} ]] && DBSYNC_PROM_PORT=8080
 [[ -z ${PGDATABASE} ]] && PGDATABASE=cexplorer
 
-function get-metrics() {
+function get_metrics() {
   shopt -s expand_aliases
   if [ -n "$SERVED" ]; then
     echo "Content-type: text/plain" # Tells the browser what kind of content to expect
@@ -47,13 +47,13 @@ function get-metrics() {
   [[ -z "${arcused}" ]] && arcused=0
   memused=$(( memtotal - $(echo "${meminf}" | grep MemAvailable | awk '{print $2}') - arcused ))
   # cpu first read
-  cpu_now_a=($(head -n1 /proc/stat))
-  cpu_sum_a="${cpu_now_a[@]:1}"
+  IFS=" " read -r -a cpu_now_a <<< "$(head -n1 /proc/stat)"
+  cpu_sum_a="${cpu_now_a[*]:1}"
   cpu_sum_a=$((${cpu_sum_a// /+}))
   sleep 1
   # cpu second read
-  cpu_now_b=($(head -n1 /proc/stat))
-  cpu_sum_b="${cpu_now_b[@]:1}"
+  IFS=" " read -r -a cpu_now_b <<< "$(head -n1 /proc/stat)"
+  cpu_sum_b="${cpu_now_b[*]:1}"
   cpu_sum_b=$((${cpu_sum_b// /+}))
   # cpu calc
   cpu_delta=$((cpu_sum_b - cpu_sum_a))
@@ -99,4 +99,4 @@ function get-metrics() {
   done
 }
 
-get-metrics
+get_metrics

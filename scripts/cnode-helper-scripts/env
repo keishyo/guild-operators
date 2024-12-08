@@ -29,6 +29,7 @@
 #BLOCKLOG_DIR="${CNODE_HOME}/guild-db/blocklog"         # Override default directory used to store block data for core node
 #BLOCKLOG_TZ="UTC"                                      # TimeZone to use when displaying blocklog - https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 #SHELLEY_TRANS_EPOCH=208                                # Override automatic detection of shelley epoch start, e.g 208 for mainnet
+#NETWORK_NAME=                                          # Override automatic detection of network name by magic
 #TG_BOT_TOKEN=""                                        # Uncomment and set to enable telegramSend function. To create your own BOT-token and Chat-Id follow guide at:
 #TG_CHAT_ID=""                                          # https://cardano-community.github.io/guild-operators/Scripts/sendalerts
 #TIMEOUT_LEDGER_STATE=300                               # Timeout in seconds for querying and dumping ledger-state
@@ -37,6 +38,7 @@
 #KOIOS_API="https://api.koios.rest/api/v1"              # Koios API for blockchain queries instead of local cli lookup.
                                                         # Leave commented for automatic network detection between MainNet, Preview, Preprod or Guild network.
                                                         # https://www.koios.rest/
+#KOIOS_API_TOKEN=""                                     # The Koios API token to use for authenticated requests. If left empty, unauthenticated requests will be made.
 #DBSYNC_QUERY_FOLDER="${CNODE_HOME}/files/dbsync/queries" # [advanced feature] Folder containing DB-Sync chain analysis queries
 #G_ACCOUNT="cardano-community"             # Override default github repository if you forked project
 
@@ -110,6 +112,7 @@
 #CIP0094_POLL_URL="https://raw.githubusercontent.com/cardano-foundation/CIP-0094-polls/main/networks/polls.json" # URL for polls to vote against
 
 #MITHRIL_DOWNLOAD="N"                                   # (Y|N) Download latest Mithril snapshot
+#MITHRIL_HOME="${CNODE_HOME}/mithril"                   # Override default Mithril path
 #MITHRIL_SIGNER_ENABLED="N"                             # (Y|N) Enable the gLiveView Mithril Signer Section
 
 #STRICT_VERSION_CHECK="Y"                               # (Y|N) Restrict operation to supported major.minor version leaving patch version open. If disabled, any version will be accepted (unsupported)
@@ -160,7 +163,7 @@ err_exit() {
 
 # Description : Query user for yes or no answer
 getAnswer() {
-  getAnswerAny answer "$* (yes/no)"
+  getAnswerAny answer "$* ([y]es / [n]o)"
   while : ; do
     case $answer in
       [Yy]*) return 0 ;;
@@ -383,16 +386,30 @@ getDecimalPlaces() {
 #             : $2 = normal | pretty (default)
 #             : $3 = full | trim (default, removes trailing zeros from fraction)
 formatLovelace() {
+  local frac
   if isNumber $1; then
     [[ $1 -eq 0 ]] && echo 0 && return
-    [[ $1 -le 999999 ]] && printf '%s' "$(local frac=$(printf '%06d' "$1"); [[ -z $3 || $3 = 'trim' ]] && ([[ ${frac} =~ (^[0-9]*[1-9])?0*$ ]]; printf '0.%s' "${BASH_REMATCH[1]}") || printf '0.%s' "${frac}")" && return
-    [[ -z $3 || $3 = 'trim' ]] && fraction="$(local frac=${1: -6}; [[ ${frac} =~ (^[0-9]*[1-9])?0*$ ]]; printf '.%s' "${BASH_REMATCH[1]}")" || fraction=".${1: -6}"
+    [[ $1 -le 999999 ]] && printf '%s' "$(frac=$(printf '%06d' "$1"); [[ -z $3 || $3 = 'trim' ]] && ([[ ${frac} =~ (^[0-9]*[1-9])?0*$ ]]; printf '0.%s' "${BASH_REMATCH[1]}") || printf '0.%s' "${frac}")" && return
+    [[ -z $3 || $3 = 'trim' ]] && fraction="$(frac=${1: -6}; [[ ${frac} =~ (^[0-9]*[1-9])?0*$ ]]; printf '.%s' "${BASH_REMATCH[1]}")" || fraction=".${1: -6}"
     [[ ${fraction} = '.' ]] && fraction=""
     [[ -z $2 || $2 = 'pretty' ]] && printf '%s%s' "$(sed ':a;s/\B[0-9]\{3\}\>/,&/;ta' <<< ${1::-6})" "${fraction}" || printf '%s%s' "${1::-6}" "${fraction}"
   else
     printf "${FG_RED}ERROR${NC}: must be a valid integer number" 1>&2
     return 1
   fi
+}
+
+# Description : Print lovelace/number in human readable format with suffix.
+formatLovelaceHuman() {
+  if isNumber $1; then
+    if _ada=$(LovelaceToADA $1 0); then
+      [[ ${_ada} -lt 1000 ]] && printf ${_ada} && return 0
+      [[ ${_ada} -lt 1000000 ]] && printf "%.1fK" "$(bc -l <<< "${_ada}/1000")" && return 0
+      [[ ${_ada} -lt 1000000000 ]] && printf "%.1fM" "$(bc -l <<< "${_ada}/1000000")" && return 0
+      printf "%.1fB" "$(bc -l <<< "${_ada}/1000000000")" && return 0
+    fi
+  fi
+  return 1
 }
 
 # Description : Pretty print Ada/Token value
@@ -416,6 +433,20 @@ ADAToLovelace() {
     echo "$1 * 1000000 / 1" | bc # /1 is to remove decimals from bc command
   else
     printf "${FG_RED}ERROR${NC}: must be a valid integer or decimal number" 1>&2
+    return 1
+  fi
+}
+
+# Description : Convert number in Lovelace to Ada
+#             : $1 = Amount in Lovelace
+#             : $2 = number of decimal places (default 6)
+LovelaceToADA() {
+  [[ -z $1 ]] && return 1
+  if isNumber $1; then
+    decimals=${2}
+    printf "%.${decimals:=6}f" "$(bc -l <<< "${1}/1000000")"
+  else
+    printf "${FG_RED}ERROR${NC}: must be a valid integer number" 1>&2
     return 1
   fi
 }
@@ -457,7 +488,24 @@ fractionToPCT() {
 isValidIPv4() {
   local ip=$1
   [[ -z ${ip} ]] && return 1
-  if [[ ${ip} =~ ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$ || ${ip} =~ ^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9_\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9_\-]*[A-Za-z0-9])$ ]]; then
+  ipv4_regex="^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
+  if [[ ${ip} =~ ${ipv4_regex} ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Description : Helper function to validate hostname or domain name
+#             : $1 = hostname or domain name
+isValidHostnameOrDomain() {
+  local name=$1
+  [[ -z ${name} ]] && return 1
+
+  # Regular expression for valid hostnames and domain names
+  hostname_regex="^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9_\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9_\-]*[A-Za-z0-9])$"
+
+  # Check if the input matches the hostname/domain name format
+  if [[ ${name} =~ ${hostname_regex} ]]; then
     return 0
   fi
   return 1
@@ -817,8 +865,8 @@ slotInterval() {
 # 3 : Koios - general error
 getProtocolParams() {
   if [[ -n ${KOIOS_API} ]]; then
-    [[ $(type -t println) = function ]] && println ACTION "curl -sSL -f -X GET -H \"accept: application/json\" ${KOIOS_API}/cli_protocol_params"
-    if ! PROT_PARAMS=$(curl -sSL -f -X GET -H "accept: application/json" "${KOIOS_API}/cli_protocol_params" 2>&1); then
+    [[ $(type -t println) = function ]] && println ACTION "curl -sSL -f -X GET ${KOIOS_API_HEADERS[*]} ${KOIOS_API}/cli_protocol_params"
+    if ! PROT_PARAMS=$(curl -sSL -f -X GET "${KOIOS_API_HEADERS[@]}" "${KOIOS_API}/cli_protocol_params" 2>&1); then
       return 3
     fi
   else
@@ -842,6 +890,24 @@ getProtocolParams() {
   ] | @tsv' <<<"${PROT_PARAMS}" 2>/dev/null)"
   PROT_VERSION="${PROT_MAJOR}.${PROT_MINOR}"
   [[ ${PROT_MAJOR} -eq 0 ]] && return 1 || return 0
+}
+
+getProtocolParamsHist() {
+  if [[ -z ${KOIOS_API} ]]; then
+    return 1
+  fi
+
+  if ! PROT_PARAMS=$(curl -sSL -f -X GET -H "accept: application/json" "${KOIOS_API}/epoch_params?_epoch_no=${1}" 2>&1); then
+    return 2
+  fi
+
+  # Extract historical protocol major and minor versions in TSV format
+  read -r PROT_MAJOR PROT_MINOR <<<"$(jq -r '.[0] | [
+    .protocol_major //0,
+    .protocol_minor //0
+  ] | @tsv' <<<"${PROT_PARAMS}" 2>/dev/null)"
+  PROT_VERSION="${PROT_MAJOR}.${PROT_MINOR}"
+
 }
 
 telegramSend() {
@@ -950,8 +1016,16 @@ set_default_vars() {
   [[ -z ${ASSET_POLICY_ID_FILENAME} ]] && ASSET_POLICY_ID_FILENAME="policy.id"
   [[ -z ${CIP0094_POLL_URL} ]] && CIP0094_POLL_URL="https://raw.githubusercontent.com/cardano-foundation/CIP-0094-polls/main/networks/polls.json"
   [[ -z ${MITHRIL_DOWNLOAD} ]] && MITHRIL_DOWNLOAD="N"
+  [[ -z ${MITHRIL_HOME} ]] && MITHRIL_HOME="${CNODE_HOME}/mithril"
   [[ -z ${MITHRIL_SIGNER_ENABLED} ]] && MITHRIL_SIGNER_ENABLED="N"
   [[ -z ${STRICT_VERSION_CHECK} ]] && STRICT_VERSION_CHECK="Y"
+  if [[ -z "${KOIOS_API_HEADERS[*]}" ]] ; then
+    if [[ -n "${KOIOS_API_TOKEN}" ]] ; then
+      KOIOS_API_HEADERS=(-H "'Authorization: Bearer ${KOIOS_API_TOKEN}'")
+    else
+      KOIOS_API_HEADERS=()
+    fi
+  fi
   FG_BLACK='\e[30m'
   FG_RED='\e[31m'
   FG_GREEN='\e[32m'
@@ -966,6 +1040,12 @@ set_default_vars() {
   STANDOUT='\e[7m'
   BOLD='\e[1m'
   NC='\e[0m'
+  ICON_CROSS='❌'
+  ICON_CHECK='✅'
+  ICON_UNKNOWN='❔'
+  # Due to bug introduced in bash upstream at 5.2.21, need to temporarily enable POSIX mode for newer bash versions, until fix is live
+  # https://github.com/bminor/bash/commit/e327891b52513bef0b34aac625c44f8fa6811f53
+  versionCheck 5.2.20 ${BASH_VERSION//(*/} && set -o posix
 }
 
 read_genesis() {
@@ -986,7 +1066,7 @@ read_genesis() {
 
 test_koios() {
   # make sure KOIOS_API is reachable, else fall back to cli
-  [[ ${ENABLE_KOIOS} = 'Y' && -n ${KOIOS_API} && $(curl -sfk -o /dev/null -w "%{http_code}" -m 5 ${KOIOS_API}/tip | awk '{print $1}') = "200" ]] || unset KOIOS_API
+  [[ ${ENABLE_KOIOS} = 'Y' && -n ${KOIOS_API} && $(curl -sfk -o /dev/null -w "%{http_code}" -m 5 "${KOIOS_API_HEADERS[@]}" ${KOIOS_API}/tip | awk '{print $1}') = "200" ]] || unset KOIOS_API
 }
 
 [[ ${0} != '-bash' ]] && PARENT=$(dirname $0) || PARENT="$(pwd)" # If sourcing at terminal, $0 would be "-bash" , which is invalid. Thus, fallback to present working directory
@@ -1030,8 +1110,8 @@ fi
 node_version="$(${CNODEBIN} version | head -1 | cut -d' ' -f2)"
 cli_version="$(${CCLI} version | head -1 | cut -d' ' -f2)"
 
-if ! versionCheckNode "9.1.0" "${node_version}" || ! versionCheckNode "9.2.1.0" "${cli_version}"; then
-  echo -e "\nKoios scripts have now been upgraded to support cardano-node 9.1.x ('${node_version}' found) / cardano-cli 9.2.x.x ('${cli_version}' found).\nPlease update cardano-node binaries (ensure to read release notes and update various configs using guild-deploy (use appropriate options to download/install/overwrite parts you need) or use tagged branches for older node version (eg: ./<script>.sh -b node-8.9.4 to switch scripts to an older branch).\n\n"
+if ! versionCheckNode "10.1.3" "${node_version}" || ! versionCheckNode "10.1.1.0" "${cli_version}"; then
+  echo -e "\nKoios scripts have now been upgraded to support cardano-node 10.1.3 ('${node_version}' found) / cardano-cli 10.1.x.x ('${cli_version}' found).\nPlease update cardano-node binaries (ensure to read release notes and update various configs using guild-deploy (use appropriate options to download/install/overwrite parts you need) or use tagged branches for older node version (eg: ./<script>.sh -b node-8.9.4 to switch scripts to an older branch).\n\n"
   return 1
 fi
 
@@ -1100,14 +1180,8 @@ fi
 
 [[ -z ${EKG_TIMEOUT} ]] && EKG_TIMEOUT=3
 [[ -z ${EKG_HOST} ]] && EKG_HOST=127.0.0.1
-if [[ ${EKG_HOST} =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-  IFS='.' read -ra EKG_OCTETS <<< ${EKG_HOST}
-  if ! [[ ${EKG_OCTETS[0]} -le 255 && ${EKG_OCTETS[1]} -le 255 && ${EKG_OCTETS[2]} -le 255 && ${EKG_OCTETS[3]} -le 255 ]]; then
-    echo "Not a valid IP range set for EKG host, please check env file for value of EKG_HOST (currently it is ${EKG_HOST} )!"
-    return 1
-  fi
-else
-  echo "Not a valid IP format set for EKG host, please check env file!"
+if ! isValidIPv4 "${EKG_HOST}" && ! isValidHostnameOrDomain "${EKG_HOST}"; then
+  echo "Not a valid IP or hostname set for EKG host, please check the env file (currently it is ${EKG_HOST})!"
   return 1
 fi
 
@@ -1156,7 +1230,7 @@ IP_VERSION=$(tr '[:upper:]' '[:lower:]' <<< "${IP_VERSION}")
 [[ -z ${USE_EKG} ]] && USE_EKG='Y'
 CNODE_PID=$(pgrep -fn "$(basename ${CNODEBIN}).*.--port ${CNODE_PORT}")
 
-if [[ -n "${CNODE_PID}" ]]; then
+if [[ ${OFFLINE_MODE} = "N" && -n "${CNODE_PID}" ]]; then
   if [[ "${USE_EKG}" == "N" ]]; then
     if { [[ "${use_lsof}" != 'Y' && -z "$(ss -lnpt | grep "pid=${CNODE_PID}," | awk -v port=":${PROM_PORT}" '$4 ~ port {print $4}')" ]]; } || { [[ "${use_lsof}" == 'Y' && -z "$(lsof -Pnl -i4 +M | grep LISTEN | awk -v pid="${CNODE_PID}" -v port=":${PROM_PORT}" '$2 == pid && $9 ~ port {print $9}')" ]]; }; then
       echo "ERROR: You specified ${PROM_PORT} as your Prometheus port, but it looks like the cardano-node (PID: ${CNODE_PID} ) is not listening on this port. Please update the config or kill the conflicting process first."
@@ -1175,31 +1249,32 @@ read_genesis
 [[ ${NWMAGIC} == "764824073" ]] && NETWORK_IDENTIFIER="--mainnet" || NETWORK_IDENTIFIER="--testnet-magic ${NWMAGIC}"
 case ${NWMAGIC} in
   764824073) 
-    NETWORK_NAME="Mainnet"
-    SHELLEY_TRANS_EPOCH=208
+    [[ -z ${NETWORK_NAME} ]] && NETWORK_NAME="Mainnet"
+    [[ -z ${SHELLEY_TRANS_EPOCH} ]] && SHELLEY_TRANS_EPOCH=208
     [[ -z ${KOIOS_API} ]] && KOIOS_API="https://api.koios.rest/api/v1" ;;
   141)
-    NETWORK_NAME="Guild"
-    SHELLEY_TRANS_EPOCH=2
+    [[ -z ${NETWORK_NAME} ]] && NETWORK_NAME="Guild"
+    [[ -z ${SHELLEY_TRANS_EPOCH} ]] && SHELLEY_TRANS_EPOCH=2
     [[ -z ${KOIOS_API} ]] && KOIOS_API="https://guild.koios.rest/api/v1";;
   1)
-    NETWORK_NAME="PreProd"
-    SHELLEY_TRANS_EPOCH=4
+    [[ -z ${NETWORK_NAME} ]] && NETWORK_NAME="PreProd"
+    [[ -z ${SHELLEY_TRANS_EPOCH} ]] && SHELLEY_TRANS_EPOCH=4
     [[ -z ${KOIOS_API} ]] && KOIOS_API="https://preprod.koios.rest/api/v1";;
   2)
-    NETWORK_NAME="Preview"
-    SHELLEY_TRANS_EPOCH=0
+    [[ -z ${NETWORK_NAME} ]] && NETWORK_NAME="Preview"
+    [[ -z ${SHELLEY_TRANS_EPOCH} ]] && SHELLEY_TRANS_EPOCH=0
     [[ -z ${KOIOS_API} ]] && KOIOS_API="https://preview.koios.rest/api/v1";;
   4)
-    NETWORK_NAME="Sanchonet"
-    SHELLEY_TRANS_EPOCH=0;;
+    [[ -z ${NETWORK_NAME} ]] && NETWORK_NAME="Sanchonet"
+    [[ -z ${SHELLEY_TRANS_EPOCH} ]] && SHELLEY_TRANS_EPOCH=0
+    [[ -z ${KOIOS_API} ]] && KOIOS_API="https://sancho.koios.rest/api/v1";;
   *) 
-    NETWORK_NAME="Custom"
+    [[ -z ${NETWORK_NAME} ]] && NETWORK_NAME="Custom"
     [[ -z ${SHELLEY_TRANS_EPOCH} ]] && SHELLEY_TRANS_EPOCH=0
 esac
 
 NETWORK_ERA=$(${CCLI} latest query tip ${NETWORK_IDENTIFIER} 2>/dev/null | jq -r '.era //empty' | tr '[:upper:]' '[:lower:]')
-[[ -z ${NETWORK_ERA} ]] && NETWORK_ERA=latest
+[[ -z ${NETWORK_ERA} ]] && NETWORK_ERA=conway
 
 [[ ${OFFLINE_MODE} = "N" && ${SHELLEY_TRANS_EPOCH} -eq -1 ]] && getNodeMetrics && getShelleyTransitionEpoch
 

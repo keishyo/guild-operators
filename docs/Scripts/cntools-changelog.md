@@ -6,6 +6,40 @@ All notable changes to this tool will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [13.3.1] - 2024-11-25
+#### Fixed
+- Corrected KES expiration information calculation on cntools launch, pool -> list and pool -> show screens
+
+## [13.3.0] - 2024-11-21
+#### Added
+- Own votes cast (SPO|DRep|CC) shown in proposal list.
+#### Changed
+- Protocol version 10 check on withdrawal if not vote delegated to show informative error if needed.
+- Only transform transaction for HW when a HW wallet is used as source.
+- Remove deprecated CIP-0094 vote command from CNTools pool menu.
+- Adoptions for Koios v1.3.0 queries (DRep status)
+#### Fixed
+- Wallet DRep delegation status to pre-defined types
+- Proposal list vote summary didn't show correct data for all types
+
+## [13.2.3] - 2024-10-16
+#### Fixed
+- Edge case fix for pool registration when cardano-hw-cli is present
+
+## [13.2.2] - 2024-09-23
+#### Fixed
+- URL for share.koios.rest to download catalyst-toolbox
+
+## [13.2.1] - 2024-09-10
+#### Added
+- Added gov vote validation for role and type
+- Gov proposal list now have additional vote data
+
+## [13.2.0] - 2024-09-08
+#### Added
+- `light` mode support for all governance functions.
+- CIP-129 support
+
 ## [13.1.0] - 2024-08-01
 #### Added
 - New Vote menu option to hold everything related to voting on Cardano.
