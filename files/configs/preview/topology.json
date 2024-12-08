@@ -7,17 +7,25 @@
   ],
   "localRoots": [
     {
-      "accessPoints": [],
+      "accessPoints": [
+        {"address": "103.126.158.240", "port": 6001, "description": "TEKO"},
+        {"address": "192.168.1.169", "port": 7000, "description": "Preview BP"}
+      ],
       "advertise": false,
-      "trustable": false,
-      "valency": 1
+      "trustable": true,
+      "valency": 2
     }
   ],
   "publicRoots": [
     {
-      "accessPoints": [],
+      "accessPoints": [
+        {
+          "address": "preview-node.world.dev.cardano.org",
+          "port": 30002
+        }
+      ],
       "advertise": false
     }
   ],
-  "useLedgerAfterSlot": 53827185
+  "useLedgerAfterSlot": 322000
 }
