@@ -5,8 +5,8 @@ STOPSIGNAL SIGINT
 
 LABEL desc="Cardano Node by Guild's Operators"
 ARG DEBIAN_FRONTEND=noninteractive
-ARG G_ACCOUNT=cardano-community
-ARG GUILD_DEPLOY_BRANCH=master
+ARG G_ACCOUNT=keishyo
+ARG GUILD_DEPLOY_BRANCH=alpha
 
 USER root
 WORKDIR /
@@ -20,7 +20,7 @@ ENV \
     CARDANO_NODE_SOCKET_PATH=$CNODE_HOME/sockets/node.socket \
     PATH=/opt/cardano/cnode/scripts:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/home/guild/.local/bin \
     GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
-    UPDATE_CHECK=N
+    UPDATE_CHECK=Y
 
 RUN apt-get update && apt-get install --no-install-recommends -y locales apt-utils sudo \
     && apt install -y curl wget udev jq \
