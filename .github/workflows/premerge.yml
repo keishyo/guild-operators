@@ -16,6 +16,7 @@ jobs:
   guild-deploy-and-build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         platform: [linux/amd64] # [linux/amd64,linux/arm64]
         distro: [ubuntu, rockylinux]
@@ -24,15 +25,12 @@ jobs:
       BRANCH: ${{ github.event.inputs.branch || github.head_ref }}
     if: github.event.pull_request.draft == false
     steps:
-    - name: Maximize build space
-      uses: easimon/maximize-build-space@master
+    - name: Free Disk Space with Analysis
+      uses: LizardByte/actions/actions/more_space@master
       with:
-        root-reserve-mb: 30720
-        swap-size-mb: 1024
-        remove-dotnet: 'true'
-        remove-android: 'true'
-        remove-haskell: ' true'
-        remove-codeql: 'true'
+        analyze-space-savings: true
+        clean-all: true
+        safe-packages: "jq,git"
     - name: Provide additional free space
       run: |
         # Workaround to provide additional free space for builds
@@ -65,6 +63,7 @@ jobs:
     - name: Testing guild-deploy.sh (with libsodium)
       run: |
         docker build . \
+          --progress=plain \
           --file files/tests/pre-merge/${{ matrix.distro }}-guild-deploy.sh.containerfile \
           --compress \
           --build-arg BRANCH=$BRANCH \
@@ -82,12 +81,13 @@ jobs:
       run: |
         echo "Working from PR Branch ${{ env.G_ACCOUNT }}/guild-operators/${{ env.BRANCH }} on COMMIT_SHA ${{ env.COMMIT_SHA }}"
         docker build . \
-        --file files/tests/pre-merge/${{ matrix.distro }}-cabal.containerfile \
-        --compress \
-        --build-arg BRANCH=${{ env.BRANCH }} \
-        --build-arg COMMIT=${{ env.COMMIT_SHA }} \
-        --build-arg G_ACCOUNT=${{ env.BUILD_G_ACCOUNT }} \
-        --tag ${{ env.REGISTRY }}/${{ env.G_ACCOUNT }}/pre-merge-${{ matrix.distro }}:cabal_${{ env.COMMIT_SHA }}
+          --progress=plain \
+          --file files/tests/pre-merge/${{ matrix.distro }}-cabal.containerfile \
+          --compress \
+          --build-arg BRANCH=${{ env.BRANCH }} \
+          --build-arg COMMIT=${{ env.COMMIT_SHA }} \
+          --build-arg G_ACCOUNT=${{ env.BUILD_G_ACCOUNT }} \
+          --tag ${{ env.REGISTRY }}/${{ env.G_ACCOUNT }}/pre-merge-${{ matrix.distro }}:cabal_${{ env.COMMIT_SHA }}
     - name: Get Versions and Image ID
       run: |
         VERSION_DETAILS=($(docker run --rm ${{ env.REGISTRY }}/${{ env.G_ACCOUNT }}/pre-merge-${{ matrix.distro }}:cabal_${{ env.COMMIT_SHA }} cardano-node --version | awk '/^cardano-node/'))
