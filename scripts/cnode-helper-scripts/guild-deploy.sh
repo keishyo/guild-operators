@@ -571,10 +571,10 @@ download_cnodebins() {
   if [[ "${SKIP_DBSYNC_DOWNLOAD}" == "N" ]]; then
     log_progress "Downloading cardano-db-sync" "13.7.1.0"
     curl -m 200 -sfL "https://github.com/IntersectMBO/cardano-db-sync/releases/download/13.7.1.0/cardano-db-sync-13.7.1.0-linux.tar.gz" -o cnodedbsync.tar.gz || err_exit "Could not download cardano-db-sync release 13.7.1.0."
-    tar zxf cnodedbsync.tar.gz --strip-components 1 ./cardano-db-sync ./cardano-db-tool &>/dev/null
+    tar zxf cnodedbsync.tar.gz --strip-components 1 ./bin/cardano-db-sync ./bin/cardano-db-tool &>/dev/null
     [[ -f cardano-db-sync ]] || err_exit "cardano-db-sync archive downloaded, but binary 'cardano-db-sync' was not found after extraction."
     rm -f cnodedbsync.tar.gz
-    mv -f -t "${HOME}"/.local/bin cardano-db-sync
+    mv -f -t "${HOME}"/.local/bin cardano-db-sync cardano-db-tool
     log_ok "Deployed cardano-db-sync" "13.7.1.0"
   else
     log_info "Skipped cardano-db-sync binary download."
