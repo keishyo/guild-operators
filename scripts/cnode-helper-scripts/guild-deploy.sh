@@ -278,10 +278,16 @@ updateWithCustomConfig() {
   file=$1
   [[ $# -ne 2 ]] && subdir="cnode-helper-scripts" || subdir=$2
   ACTIVE_STEP="Refreshing ${file}"
+  # RESUME: bỏ qua file đã tải thành công ở lần trước
+  if [[ "${RESUME:-N}" == "Y" && -f "${file}" ]]; then
+    log_ok "Refreshing ${file}" "cached, skipped"
+    return 0
+  fi
+  # retry + backoff để vượt rate-limit tạm thời
   local i
   for i in 1 2 3 4 5; do
     curl -s -f -m ${CURL_TIMEOUT} -o ${file}.tmp "${URL_RAW}/scripts/${subdir}/${file}" && break
-    rm -f ${file}.tmp; sleep $((i*3))
+    rm -f ${file}.tmp; sleep $((i*5))
   done
   [[ ! -f ${file}.tmp ]] && err_exit "Failed to download '${file}' from GitHub"
   if [[ -f ${file} && ${SCRIPTS_FORCE_OVERWRITE} != 'Y' ]]; then
